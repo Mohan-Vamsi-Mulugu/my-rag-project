@@ -26,11 +26,10 @@ st.write("Upload PDFs and ask questions about their content.")
 def initialize_rag():
 
     embedding_manager = EmbeddingManager()
-
+    
     vectorstore = VectorStore(
-        persist_directory=os.getenv(
-            "CHROMA_DB_DIR", "vector_store"
-        )
+        collection_name="pdf_documents",
+        embedding_dim=embedding_manager.model.get_embedding_dimension()
     )
 
     retriever = RAGRetriever(
