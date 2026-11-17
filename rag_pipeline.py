@@ -319,7 +319,7 @@ class VectorStore:
 # 6. RAG RETRIEVER
 # ============================================================
 
-c
+
 class RAGRetriever:
     """Retrieves relevant chunks from Qdrant Cloud."""
 
