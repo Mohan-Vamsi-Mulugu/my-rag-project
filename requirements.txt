@@ -1,10 +1,15 @@
 streamlit
 langchain
 langchain-community
+langchain-core
 langchain-text-splitters
 langchain-cohere
+
+chromadb>=0.5.23,<2.0
+pydantic>=2.0,<3.0
+pydantic-settings>=2.0,<3.0
+
 sentence-transformers
-chromadb
 pymupdf
 python-dotenv
 numpy
