@@ -4,7 +4,10 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-import chromadb
+import os
+import uuid
+
+from qdrant_client import QdrantClient, models
 import numpy as np
 
 from dotenv import load_dotenv
@@ -141,35 +144,59 @@ class EmbeddingManager:
 # 5. CHROMADB VECTOR STORE
 # ============================================================
 
+
 class VectorStore:
+    """Manages document embeddings in Qdrant Cloud."""
 
     def __init__(
         self,
-        collection_name=COLLECTION_NAME,
-        persist_directory=VECTOR_DB_DIR
+        collection_name="pdf_documents",
+        embedding_dim=384
     ):
 
-        os.makedirs(persist_directory, exist_ok=True)
+        self.collection_name = collection_name
+        self.embedding_dim = embedding_dim
 
-        self.client = chromadb.PersistentClient(
-            path=persist_directory
+        qdrant_url = os.getenv("QDRANT_URL")
+        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+
+        if not qdrant_url or not qdrant_api_key:
+            raise ValueError(
+                "QDRANT_URL or QDRANT_API_KEY is missing."
+            )
+
+        # Connect to Qdrant Cloud
+        self.client = QdrantClient(
+            url=qdrant_url,
+            api_key=qdrant_api_key,
+            timeout=60
         )
 
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={
-                "description": "PDF RAG collection",
-                "hnsw:space": "cosine"
-            }
-        )
+        # Create collection if it does not exist
+        if not self.client.collection_exists(
+            self.collection_name
+        ):
+
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=models.VectorParams(
+                    size=self.embedding_dim,
+                    distance=models.Distance.COSINE
+                )
+            )
+
+            print("Qdrant collection created.")
+
+        else:
+            print("Existing Qdrant collection connected.")
 
         print(
-            "Vector store initialized. Documents:",
-            self.collection.count()
+            "Connected to Qdrant Cloud:",
+            self.collection_name
         )
 
     @staticmethod
-    def generate_id(doc: Document) -> str:
+    def generate_id(doc):
 
         unique_content = (
             doc.metadata.get("source_file", "")
@@ -178,79 +205,128 @@ class VectorStore:
             + doc.page_content
         )
 
-        return hashlib.sha256(
-            unique_content.encode("utf-8")
-        ).hexdigest()
+        return str(
+            uuid.uuid5(uuid.NAMESPACE_URL, unique_content)
+        )
 
     def add_documents(
         self,
-        documents: List[Document],
-        embeddings: np.ndarray,
-        batch_size=BATCH_SIZE
+        documents,
+        embeddings,
+        batch_size=100
     ):
 
         if len(documents) != len(embeddings):
-            raise ValueError("Document and embedding counts differ.")
+            raise ValueError(
+                "Document and embedding counts differ."
+            )
 
-        # Re-index current source files without retaining their old chunks.
+        # Remove previous chunks for the files being re-indexed
         source_files = {
-            doc.metadata["source_file"]
+            doc.metadata.get("source_file")
             for doc in documents
+            if doc.metadata.get("source_file")
         }
 
         for source in source_files:
-            self.collection.delete(
-                where={"source_file": source}
+
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="source_file",
+                                match=models.MatchValue(
+                                    value=source
+                                )
+                            )
+                        ]
+                    )
+                ),
+                wait=True
             )
 
+        # Upload in batches
         for start in range(0, len(documents), batch_size):
 
-            batch_docs = documents[start:start + batch_size]
-            batch_embeddings = embeddings[start:start + batch_size]
-
-            ids = [
-                self.generate_id(doc)
-                for doc in batch_docs
+            batch_docs = documents[
+                start:start + batch_size
             ]
 
-            metadatas = []
-            for doc in batch_docs:
+            batch_embeddings = embeddings[
+                start:start + batch_size
+            ]
+
+            points = []
+
+            for doc, embedding in zip(
+                batch_docs,
+                batch_embeddings
+            ):
 
                 metadata = {
                     key: value
                     for key, value in doc.metadata.items()
-                    if isinstance(value, (str, int, float, bool))
+                    if isinstance(
+                        value,
+                        (str, int, float, bool)
+                    )
                 }
 
-                metadata["content_length"] = len(doc.page_content)
+                metadata["content_length"] = len(
+                    doc.page_content
+                )
 
-                metadatas.append(metadata)
+                payload = {
+                    "content": doc.page_content,
+                    "metadata": metadata,
+                    **metadata
+                }
 
-            self.collection.upsert(
-                ids=ids,
-                documents=[
-                    doc.page_content for doc in batch_docs
-                ],
-                embeddings=batch_embeddings.tolist(),
-                metadatas=metadatas
+                points.append(
+                    models.PointStruct(
+                        id=self.generate_id(doc),
+                        vector=embedding.tolist(),
+                        payload=payload
+                    )
+                )
+
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points,
+                wait=True
             )
 
         print(
-            f"Indexed {len(documents)} chunks. "
-            f"Total collection size: {self.collection.count()}"
+            "Successfully indexed:",
+            len(documents),
+            "chunks"
         )
+
+    def count(self):
+
+        result = self.client.count(
+            collection_name=self.collection_name,
+            exact=True
+        )
+
+        return result.count
+
 
 
 # ============================================================
 # 6. RAG RETRIEVER
 # ============================================================
 
+c
 class RAGRetriever:
+    """Retrieves relevant chunks from Qdrant Cloud."""
 
     def __init__(
         self,
-        vector_store: VectorStore,
-        embedding_manager: EmbeddingManager
+        vector_store,
+        embedding_manager
     ):
 
         self.vector_store = vector_store
@@ -258,53 +334,51 @@ class RAGRetriever:
 
     def retrieve(
         self,
-        query: str,
-        top_k: int = 5,
-        score_threshold: float = 0.20
-    ) -> List[Dict[str, Any]]:
+        query,
+        top_k=5,
+        score_threshold=0.20
+    ):
 
+        if self.vector_store.count() == 0:
+            return []
+
+        # Generate query embedding
         query_embedding = (
             self.embedding_manager
             .generate_embeddings([query])[0]
         )
 
-        collection = self.vector_store.collection
-
-        results = collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=min(top_k, collection.count()),
-            include=["documents", "metadatas", "distances"]
+        # Search Qdrant
+        results = self.vector_store.client.query_points(
+            collection_name=self.vector_store.collection_name,
+            query=query_embedding.tolist(),
+            limit=top_k,
+            with_payload=True
         )
 
         retrieved_docs = []
 
-        if not results["documents"] or not results["documents"][0]:
-            return retrieved_docs
-
-        for rank, (content, metadata, distance, doc_id) in enumerate(
-            zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0],
-                results["ids"][0]
-            ),
+        for rank, point in enumerate(
+            results.points,
             start=1
         ):
 
-            # Chroma cosine distance = 1 - cosine similarity
-            similarity = 1.0 - distance
+            similarity = point.score
 
             if similarity >= score_threshold:
 
+                payload = point.payload or {}
+
                 retrieved_docs.append({
-                    "id": doc_id,
-                    "content": content,
-                    "metadata": metadata,
+                    "id": str(point.id),
+                    "content": payload.get("content", ""),
+                    "metadata": payload.get("metadata", {}),
                     "similarity_score": similarity,
                     "rank": rank
                 })
 
         return retrieved_docs
+
 
 
 # ============================================================
