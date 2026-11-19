@@ -149,8 +149,8 @@ class VectorStore:
 
         self.collection_name = collection_name
 
-        qdrant_url = os.getenv("QDRANT_URL")
-        qdrant_api_key = os.getenv("QDRANT_API_KEY")
+        qdrant_url = os.getenv("QDRANT_URL", "").strip()
+        qdrant_api_key = os.getenv("QDRANT_API_KEY", "").strip()
 
         if not qdrant_url or not qdrant_api_key:
             raise ValueError(
@@ -384,10 +384,10 @@ class RAGRetriever:
 
 def initialize_llm():
 
-    api_key = os.getenv("COHERE_API_KEY")
+    api_key = os.getenv("COHERE_API_KEY", "").strip()
 
     if not api_key:
-        raise ValueError("COHERE_API_KEY is missing.")
+        raise ValueError("CO`HERE_API_KEY is missing.")
 
     return ChatCohere(
         model=LLM_MODEL,
