@@ -12,7 +12,8 @@ from rag_pipeline import (
     AdvancedRAGPipeline,
     load_pdfs,
     split_documents,
-    initialize_llm
+    initialize_llm,
+    COLLECTION_NAME
 )
 
 
@@ -37,14 +38,13 @@ st.write(
 # ============================================================
 # 2. INITIALIZE RAG COMPONENTS
 # ============================================================
-
 @st.cache_resource
 def initialize_rag():
 
     embedding_manager = EmbeddingManager()
 
     vectorstore = VectorStore(
-        collection_name="pdf_documents",
+        collection_name=COLLECTION_NAME,
         embedding_dim=embedding_manager.dimension
     )
 
@@ -61,25 +61,6 @@ def initialize_rag():
     )
 
     return pipeline, vectorstore, embedding_manager
-
-
-try:
-
-    with st.spinner("Initializing RAG system..."):
-
-        pipeline, vectorstore, embedding_manager = (
-            initialize_rag()
-        )
-
-    st.success("RAG system connected successfully.")
-
-except Exception as e:
-
-    st.error(f"RAG initialization failed: {e}")
-
-    st.stop()
-
-
 # ============================================================
 # 3. VECTOR DATABASE STATUS
 # ============================================================
