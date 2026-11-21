@@ -40,27 +40,29 @@ st.write(
 # ============================================================
 @st.cache_resource
 def initialize_rag():
+    try:
+        embedding_manager = EmbeddingManager()
 
-    embedding_manager = EmbeddingManager()
+        vectorstore = VectorStore(
+            collection_name=COLLECTION_NAME,
+            embedding_dim=embedding_manager.dimension
+        )
 
-    vectorstore = VectorStore(
-        collection_name=COLLECTION_NAME,
-        embedding_dim=embedding_manager.dimension
-    )
+        retriever = RAGRetriever(vectorstore, embedding_manager)
+        llm = initialize_llm()
+        pipeline = AdvancedRAGPipeline(retriever, llm)
 
-    retriever = RAGRetriever(
-        vectorstore,
-        embedding_manager
-    )
+        return embedding_manager, vectorstore, retriever, pipeline
 
-    llm = initialize_llm()
+    except Exception as e:
+        st.error(f"RAG initialization failed: {e}")
+        return None, None, None, None
+# Initialize all RAG components
+embedding_manager, vectorstore, retriever, pipeline = initialize_rag()
+# ============================================================
+# 3. VECTOR DATABASE STATUS
+# ============================================================
 
-    pipeline = AdvancedRAGPipeline(
-        retriever,
-        llm
-    )
-
-    return pipeline, vectorstore, embedding_manager
 # ============================================================
 # 3. VECTOR DATABASE STATUS
 # ============================================================
@@ -69,20 +71,22 @@ with st.sidebar:
 
     st.header("Database Status")
 
-    try:
+    if vectorstore is not None:
+        try:
+            total_chunks = vectorstore.count()
 
-        total_chunks = vectorstore.count()
+            st.metric(
+                "Indexed document chunks",
+                total_chunks
+            )
 
-        st.metric(
-            "Indexed document chunks",
-            total_chunks
-        )
+            st.success("Qdrant Cloud connected.")
 
-        st.success("Qdrant Cloud connected.")
+        except Exception as e:
+            st.error(f"Database error: {e}")
 
-    except Exception as e:
-
-        st.error(f"Database error: {e}")
+    else:
+        st.error("Database initialization failed.")
 
 
 # ============================================================
@@ -101,7 +105,7 @@ uploaded_files = st.file_uploader(
 if st.button(
     "Process PDFs",
     type="primary",
-    disabled=not uploaded_files
+    disabled=not uploaded_files or vectorstore is None or embedding_manager is None
 ):
 
     with st.spinner(
