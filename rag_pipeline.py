@@ -214,6 +214,16 @@ class VectorStore:
 
             print("Existing Qdrant collection connected.")
 
+        # Create the required payload index
+        self.client.create_payload_index(
+            collection_name=self.collection_name,
+            field_name="source_file",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+            wait=True
+        )
+
+        print("Qdrant payload  index ready.", flush=True)
+
         print("Connected to Qdrant Cloud.")
 
     @staticmethod
@@ -310,7 +320,11 @@ class VectorStore:
                 points.append(
                     models.PointStruct(
                         id=self.generate_id(doc),
-                        vector=embedding.tolist(),
+                        vector = (
+                            embedding.tolist()
+                            if hasattr(embedding, "tolist")
+                            else list(embedding)
+                        ),
                         payload=payload
                     )
                 )
@@ -367,7 +381,11 @@ class RAGRetriever:
 
         results = self.vector_store.client.query_points(
             collection_name=self.vector_store.collection_name,
-            query=query_embedding.tolist(),
+            query = (
+            query_embedding.tolist()
+            if hasattr(query_embedding, "tolist")
+            else list(query_embedding)
+        ),
             limit=top_k,
             with_payload=True
         )
