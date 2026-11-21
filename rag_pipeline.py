@@ -4,16 +4,15 @@ import uuid
 from pathlib import Path
 from typing import List, Dict, Any
 
-import numpy as np
 from dotenv import load_dotenv
 
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
 
 from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_cohere import ChatCohere, CohereEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_cohere import ChatCohere
+
 
 
 # ============================================================
@@ -22,10 +21,14 @@ from langchain_cohere import ChatCohere
 
 load_dotenv()
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "embed-english-light-v3.0"
+
+EMBEDDING_DIMENSION = 384
+
+COLLECTION_NAME = "pdf_documents_cohere_light_v3"
 LLM_MODEL = "command-a-03-2025"
 
-COLLECTION_NAME = "pdf_documents"
+
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
@@ -100,39 +103,54 @@ def split_documents(
 # 4. EMBEDDING MANAGER
 # ============================================================
 
+
 class EmbeddingManager:
 
     def __init__(self, model_name=EMBEDDING_MODEL):
 
-        self.model = SentenceTransformer(model_name)
+        api_key = os.getenv("COHERE_API_KEY", "").strip()
 
-        self.dimension = self.model.get_embedding_dimension()
+        if not api_key:
+            raise ValueError("COHERE_API_KEY is missing.")
+
+        print("Initializing Cohere Embeddings...", flush=True)
+
+        self.model = CohereEmbeddings(
+            model=model_name,
+            cohere_api_key=api_key
+        )
+
+        self.dimension = EMBEDDING_DIMENSION
 
         print(
-            f"Embedding model loaded: {model_name}, "
-            f"dimension: {self.dimension}"
+            f"Cohere embedding model ready: {model_name}",
+            flush=True
         )
 
-    def generate_embeddings(
-        self,
-        texts: List[str]
-    ) -> np.ndarray:
+    def generate_embeddings(self, texts: List[str]):
 
         if not texts:
-            return np.empty(
-                (0, self.dimension),
-                dtype=np.float32
-            )
+            return []
 
-        embeddings = self.model.encode(
-            texts,
-            batch_size=32,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True
-        )
+        embeddings = []
 
-        return embeddings.astype(np.float32)
+        # Process smaller batches to control memory
+        batch_size = 48
+
+        for start in range(0, len(texts), batch_size):
+
+            batch = texts[start:start + batch_size]
+
+            batch_embeddings = self.model.embed_documents(batch)
+
+            embeddings.extend(batch_embeddings)
+
+        return embeddings
+
+    def generate_query_embedding(self, query: str):
+
+        return self.model.embed_query(query)
+
 
 
 # ============================================================
@@ -343,9 +361,9 @@ class RAGRetriever:
             return []
 
         query_embedding = (
-            self.embedding_manager
-            .generate_embeddings([query])[0]
-        )
+    self.embedding_manager
+    .generate_query_embedding(query)
+)
 
         results = self.vector_store.client.query_points(
             collection_name=self.vector_store.collection_name,
